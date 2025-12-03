@@ -10,7 +10,7 @@ const User = require("../models/user");
 const { status500, errorMessageAndStatus } = require("../helpers/errors");
 
 // SIGNUP ------------------------------------------
-exports.signup = (request, response, next) => {
+exports.signup = async (request, response, next) => {
   const errors = validationResult(request);
 
   if (!errors.isEmpty()) {
@@ -20,94 +20,98 @@ exports.signup = (request, response, next) => {
   const email = request.body.email;
   const name = request.body.name;
   const password = request.body.password;
-  bcrypt
-    .hash(password, 12)
-    .then((hashedPassword) => {
-      const user = new User({
-        email: email,
-        password: hashedPassword,
-        name: name,
-      });
-      return user.save();
-    })
-    .then((result) => {
-      response.status(201).json({ message: "User crated", userId: result._id });
-    })
-    .catch((error) => {
-      if (!error.statusCode) {
-        status500(error, next);
-      }
+
+  try {
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const user = new User({
+      email: email,
+      password: hashedPassword,
+      name: name,
     });
+    const result = await user.save();
+    if (!result) {
+      throw errorMessageAndStatus("User creation failed.", 500);
+    }
+    response.status(201).json({ message: "User crated", userId: result._id });
+  } catch (error) {
+    if (!error.statusCode) {
+      status500(error, next);
+    }
+  }
 };
 
 // LOGIN ------------------------------------------
-exports.login = (request, response, next) => {
+exports.login = async (request, response, next) => {
   const email = request.body.email;
   const password = request.body.password;
   let loadedUser;
-  User.findOne({ email: email })
-    .then((user) => {
-      if (!user) {
-        throw errorMessageAndStatus("User with this email is not found!.", 401);
-      }
-      loadedUser = user;
-      return bcrypt.compare(password, user.password);
-    })
-    .then((isEqual) => {
-      if (!isEqual) {
-        throw errorMessageAndStatus("Wrong password.", 401);
-      }
-      const token = JWT.sign(
-        {
-          email: loadedUser.email,
-          userId: loadedUser._id.toString(),
-        },
-        "somesupersecretsecret",
-        { expiresIn: "1h" }
-      );
-      response
-        .status(200)
-        .json({ token: token, userId: loadedUser._id.toString() });
-    })
-    .catch((error) => {
-      if (!error.statusCode) {
-        status500(error, next);
-      }
-    });
+  try {
+    const user = await User.findOne({ email: email });
+
+    if (!user) {
+      throw errorMessageAndStatus("User with this email is not found!.", 401);
+    }
+
+    loadedUser = user;
+
+    const isEqual = await bcrypt.compare(password, user.password);
+
+    if (!isEqual) {
+      throw errorMessageAndStatus("Wrong password.", 401);
+    }
+
+    const token = JWT.sign(
+      {
+        email: loadedUser.email,
+        userId: loadedUser._id.toString(),
+      },
+      "somesupersecretsecret",
+      { expiresIn: "1h" }
+    );
+    if (!token) {
+      throw errorMessageAndStatus("Could not create token.", 500);
+    }
+    response
+      .status(200)
+      .json({ token: token, userId: loadedUser._id.toString() });
+  } catch (error) {
+    if (!error.statusCode) {
+      status500(error, next);
+    }
+  }
 };
 
 // GET STATUS ------------------------------------------
-exports.getUserStatus = (request, response, next) => {
-  User.findById(request.userId)
-    .then((user) => {
-      if (!user) {
-        throw errorMessageAndStatus("User not found.", 404);
-      }
-      response.status(200).json({ status: user.status });
-    })
-    .catch((error) => {
-      status500(error, next);
-    });
+exports.getUserStatus = async (request, response, next) => {
+  try {
+    const user = await User.findById(request.userId);
+    if (!user) {
+      throw errorMessageAndStatus("User not found.", 404);
+    }
+    response.status(200).json({ status: user.status });
+  } catch (error) {
+    status500(error, next);
+  }
 };
 
 // UPDATE STATUS ------------------------------------------
-exports.updateUserStatus = (request, response, next) => {
+exports.updateUserStatus = async (request, response, next) => {
   const newStatus = request.body.status;
+  try {
+    const user = await User.findById(request.userId);
+    if (!user) {
+      throw errorMessageAndStatus("User not found.", 404);
+    }
+    user.status = newStatus;
+    const result = await user.save();
+    if (!result) {
+      throw errorMessageAndStatus("Could not update status.", 500);
+    }
 
-  User.findById(request.userId)
-    .then((user) => {
-      if (!user) {
-        throw errorMessageAndStatus("User not found.", 404);
-      }
-      user.status = newStatus;
-      return user.save();
-    })
-    .then((result) => {
-      response
-        .status(200)
-        .json({ message: "User status updated.", user: result });
-    })
-    .catch((error) => {
-      status500(error, next);
-    });
+    response
+      .status(200)
+      .json({ message: "User status updated.", user: result });
+  } catch (error) {
+    status500(error, next);
+  }
 };
