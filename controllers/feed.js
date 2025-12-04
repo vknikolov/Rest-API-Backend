@@ -1,11 +1,15 @@
 // Libraries
 const { validationResult } = require("express-validator");
+// Socket IO
+const { getIO } = require("../socket");
+
 // Models
 const Post = require("../models/post");
 const User = require("../models/user");
 // Helpers
 const { status500, errorMessageAndStatus } = require("../helpers/errors");
 const { clearImage } = require("../helpers/helpers.js");
+const { get } = require("mongoose");
 
 // GET POSTS ------------------------------------------
 exports.getPosts = async (request, response, next) => {
@@ -16,6 +20,7 @@ exports.getPosts = async (request, response, next) => {
 
     const posts = await Post.find()
       .populate("creator")
+      .sort({ createdAt: -1 }) // latest post first
       .skip((CURRENT_PAGE - 1) * PER_PAGE)
       .limit(PER_PAGE);
 
@@ -61,7 +66,7 @@ exports.createPost = async (request, response, next) => {
     creator: request.userId,
   });
   try {
-    const savedPost = await post.save();
+    await post.save();
     const user = await User.findById(request.userId);
     // Create relationship between user and post
     if (!user) {
@@ -73,10 +78,17 @@ exports.createPost = async (request, response, next) => {
     if (!createdUser) {
       throw errorMessageAndStatus("Could not update user posts.", 500);
     }
+    getIO().emit("posts", {
+      action: "create",
+      post: {
+        ...post._doc,
+        creator: { _id: request.userId, name: creator.name },
+      },
+    });
     // Respond with created post data
     response.status(201).json({
       message: "Post created successfully!",
-      post: savedPost,
+      post: post,
       creator: {
         _id: creator._id,
         name: creator.name,
@@ -133,12 +145,12 @@ exports.editPost = async (request, response, next) => {
   }
 
   try {
-    const post = await Post.findById(postID);
+    const post = await Post.findById(postID).populate("creator");
     if (!post) {
       throw errorMessageAndStatus("Could not find post.", 404);
     }
     // Check login user to be the creator of the post and only then allow edit
-    if (post.creator.toString() !== request.userId) {
+    if (post.creator._id.toString() !== request.userId) {
       throw errorMessageAndStatus("Not authorized", 403);
     }
 
@@ -153,6 +165,10 @@ exports.editPost = async (request, response, next) => {
     if (!updatedPost) {
       throw errorMessageAndStatus("Could not update post.", 500);
     }
+    getIO().emit("posts", {
+      action: "update",
+      post: updatedPost,
+    });
     response.status(200).json({ message: "Post updated!", post: updatedPost });
   } catch (error) {
     status500(error, next);
@@ -181,6 +197,7 @@ exports.deletePost = async (request, response, next) => {
     if (!result) {
       throw errorMessageAndStatus("Could not update user posts.", 500);
     }
+    getIO().emit("posts", { action: "delete", postID: postID });
     response.status(200).json({ message: "Post deleted!" });
   } catch (error) {
     status500(error, next);
